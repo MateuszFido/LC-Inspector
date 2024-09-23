@@ -28,3 +28,5 @@ def read_files(file_path):
     # Create paths and check if already present 
     
     return cal_files, res_files
+
+# TODO: Include MS/LC separation>? 

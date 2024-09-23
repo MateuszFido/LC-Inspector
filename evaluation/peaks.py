@@ -31,7 +31,7 @@ def assign_peaks(baseline_corrected_data, peaks, filename, file_path):
 
     This function iterates over the annotated peaks data and assigns peaks to the chromatogram based on the provided data. It skips rows that contain "n.a." values or "UV_VIS" in the peak name. It creates a subfolder called "peaks" in the "plots" directory if it doesn't exist. It then plots the chromatogram and highlights the assigned peaks. It also plots vertical lines for the left and right bases of each peak and fills the area underneath the peak's contour line with a shaded region. The plot is saved as a PNG file in the "peaks" subfolder. The function returns a list of Compound objects representing the assigned peaks.
     """
-    
+    #TODO: Delete when MS annotation present? Relegate? 
     compound_list = []
     for index, peak in peaks.iterrows():
         # First, check which naming convention is used by Chromeleon

@@ -14,7 +14,7 @@ class Compound:
     def __str__(self):
         return f"Peak: {self.name} (index: {self.index}) with retention time: {self.rt} min, total area: {self.area} mAU."
         
-
+#FIXME: How is this different from peaks.py? 
 def detect_peaks(time, baseline_corrected_data, theoretical_peaklist, filename, file_path):
     # Find peaks in the baseline-corrected data
     peaks, _ = find_peaks(baseline_corrected_data, prominence=2)

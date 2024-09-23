@@ -76,3 +76,4 @@ def normalize_data(baseline_corrected):
     normalized_data = (normalized_data - min(normalized_data)) / (max(normalized_data) - min(normalized_data))
     return normalized_data
 
+# TODO: Clean this up

@@ -47,14 +47,17 @@ def run():
     
     # Redirect output to a log file
     sys.stdout = log_file
-    # Path to the directory where the script is located
-    file_path = Path(__file__).parent / 'data'
-    annotation_path = Path(__file__).parent / 'data' / 'annotations'
+    # Set up paths
+    data_path = Path(__file__).parent / 'data'
+    lc_path = Path(__file__).parent / 'data' / 'lc'
+    ms_path = Path(__file__).parent / 'data' / 'ms'
+    
     # Grab the calibration files and measurement files
-    cal_files, res_files = read_files(file_path)
+    cal_files, res_files = read_files(data_path)
 
     print('Found calibration files:', cal_files, '\n')
     print('Found measurement files:', res_files, '\n') 
+
     
     # Direct the output back to regular stdout
     sys.stdout = stdout
@@ -76,7 +79,7 @@ def run():
             sys.stdout = log_file
             print(f'Analyzing {cal_file}...')
             # Step 1: Load the .txt data into a pd.DataFrame (load_absorbance_data.py)
-            dataframe = load_absorbance_data(file_path / cal_file)
+            dataframe = load_absorbance_data(data_path / cal_file)
             # Step 2: Load the annotated peaks (load_annotated_peaks.py)
             print(f'Looking for annotations in {annotation_path / cal_file}...')
             try:
@@ -85,9 +88,9 @@ def run():
                 print(f'[WARNING] Did not find \'annotations\'/{cal_file}!')
                 peaks = None
             # Step 3: Perform background correction (bg_corr.py)
-            baseline_corrected_data = baseline_correction(dataframe, cal_file, file_path)
+            baseline_corrected_data = baseline_correction(dataframe, cal_file, data_path)
             # Step 4: Assign peaks (peaks.py)  
-            compounds = assign_peaks(baseline_corrected_data, peaks, cal_file, file_path)
+            compounds = assign_peaks(baseline_corrected_data, peaks, cal_file, data_path)
             # Step 5: Assign the concentration values from the current file to the compounds  
             concentration = extract_concentration(cal_file)
             for compound in compounds:
@@ -98,7 +101,7 @@ def run():
 
     # Step 6: Graph and return the curve parameters 
     print('Calculating calibration curves...')
-    curve_params = calibrate(all_compounds, file_path)
+    curve_params = calibrate(all_compounds, data_path)
     concentrations = {}
     
     # Step 7: Repeat the same process for the measurement files
@@ -106,15 +109,15 @@ def run():
         for res_file in res_files:
             sys.stdout = log_file
             print(f'Analyzing {res_file}...')
-            dataframe = load_absorbance_data(file_path / res_file)
+            dataframe = load_absorbance_data(data_path / res_file)
             try:
                 peaks = load_annotated_peaks(annotation_path / res_file)
             except(FileNotFoundError):
                 print(f'[WARNING] Did not find \'annotations\'/{res_file}!')
                 peaks = None
                 continue
-            baseline_corrected_data = baseline_correction(dataframe, res_file, file_path)
-            compounds = assign_peaks(baseline_corrected_data, peaks, res_file, file_path)
+            baseline_corrected_data = baseline_correction(dataframe, res_file, data_path)
+            compounds = assign_peaks(baseline_corrected_data, peaks, res_file, data_path)
             compounds_in_file = {}
             for compound in compounds:
                 try:
