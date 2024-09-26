@@ -9,6 +9,7 @@ import sys
 from alive_progress import alive_bar
 from scipy.signal import find_peaks, peak_widths
 from pathlib import Path
+from scipy.stats import mode
 
 def load_ms1_data(path: str) -> tuple[list, np.ndarray, str]:
     """
@@ -39,7 +40,7 @@ def load_ms1_data(path: str) -> tuple[list, np.ndarray, str]:
     low_mass = auxiliary.cvquery(data[0], 'MS:1000501')
     high_mass = auxiliary.cvquery(data[0], 'MS:1000500')
     # Calculate the resolution of the m/z axis
-    resolution = int((high_mass - low_mass) / 0.01)
+    resolution = int((high_mass - low_mass) / 0.0001)
     # Create the m/z axis
     mz_axis = np.linspace(low_mass, high_mass, resolution, dtype=np.float64)
     # Get the filename without the extension, optional 
@@ -69,7 +70,7 @@ def calculate_mz_axis(data):
     low_mass = auxiliary.cvquery(data[0], 'MS:1000501')
     high_mass = auxiliary.cvquery(data[0], 'MS:1000500')
     # Calculate the resolution of the m/z axis
-    resolution = int((high_mass - low_mass) / 0.01)
+    resolution = int((high_mass - low_mass) / 0.0001)
     # Create the m/z axis
     mz_axis = np.linspace(low_mass, high_mass, resolution, dtype=np.float64)
 
@@ -106,28 +107,25 @@ def average_intensity(path: str) -> pd.DataFrame:
     avg_int = np.zeros(len(mz_axis))
     
     # Grab the filename from the first scan 
-    bar_title = f"Averaging the spectra for {path.split('/')[-1].replace('.mzml', '')}."
+    bar_title = f"Averaging MS1 spectra for {path.split('/')[-1].replace('.mzml', '')}."
     
+    csv_data = np.empty((len(mz_axis), len(data)+1), dtype=np.float64)
     # Iterate over the scans, calculate the average intensity and store it in avg_int
-    counter = 0
     with alive_bar(len(data), title=bar_title, calibrate=2) as bar:
         for scan in data:
-            counter += 1
             # Get m/z values and their intensities from the MzML path
             mz_array = np.ndarray.transpose(scan['m/z array'])
             intensity_array = np.ndarray.transpose(scan['intensity array'])
-            
             # Interpolate continuous intensity signal from discrete m/z
-            int_interp = np.interp(mz_axis, mz_array, intensity_array, left=0, right=0)
-            avg_int += int_interp              
+            int_interp = np.interp(mz_axis, mz_array, intensity_array)
+            avg_int += int_interp 
             bar()
-    
-    # Calculate the average intensity
-    int_axis = np.round((avg_int / counter))
+
+    avg_int /= len(data)
     
     # Store the averaged intensity values in a DataFrame
-    data_matrix = pd.DataFrame({'m/z': np.round(mz_axis, 4), 'intensity / a.u.': int_axis }, dtype=np.float64)
-    
+    data_matrix = pd.DataFrame({'m/z': np.round(mz_axis, 4), 'intensity / a.u.': avg_int }, dtype=np.float64)
+
     # Save to a separate .csv file
     data_matrix.to_csv(path.replace('.mzml', '.csv'), index=False)
     
@@ -147,9 +145,9 @@ class Peak():
         '''
 
     def __init__(self, index: int, mz: np.ndarray, width: list):
-        self.index = index
-        self.mz = mz
-        self.width = width
+        self.index = index # Index of the peak's maximum intensity point
+        self.mz = mz       # Numpy array of mz values computed from indices of intensity axis
+        self.width = width # The width of the peak from scipy.peak_widths()
 
     def __str__(self):
         return f"Feature with m/z range: {self.mz} and intensity range: {self.int_range}"
@@ -174,20 +172,23 @@ def pick_peaks(path, mz_axis):
     peaklist = []
 
     # Find peaks
-    peaks = find_peaks(data['intensity / a.u.'], height=1000)
+    peaks = find_peaks(data['intensity / a.u.'], prominence=50)
 
     # Calculate peak widths at 0.9 of peak amplitude
     widths, width_heights, left, right = peak_widths(data['intensity / a.u.'], peaks[0], rel_height=0.9)
-    
+
     # For each peak, extract their properties and append the Peak to peaklist
     counter = 0
     for peak_idx in peaks[0]:
         mz = mz_axis[int(np.floor(left[counter])):int(np.ceil(right[counter]))]   # m/z range
         width = [int(np.floor(left[counter])), int(np.ceil(right[counter]))]      # left and right base, rounded down and up respectively
-        peak = Peak(peak_idx, mz, width) # create the Peak object
         counter += 1
-        peaklist.append(peak)
-    
+        max_int_index = data['intensity / a.u.'].iloc[width[0]:width[1]].idxmax()
+        max_int = data['intensity / a.u.'].iloc[max_int_index]
+        
+        peak = Peak(max_int_index, mz, width) # create the Peak object
+        peaklist.append(peak)    
+
     return peaklist
 
 def construct_xic(path):
@@ -231,10 +232,11 @@ def construct_xic(path):
             i = 1
             for peak in peaks:
                 if i < len(peaks)+2:
-                    data[i][0] = round(np.median(peak.mz), 4)
+                    # TODO: Think about adding p-value comparisons for m/z that falls between two overlapping peaks
+                    data[i][0] = np.round(mz_axis[peak.index], 4)
                 feature_int = int_interp[peak.width[0]:peak.width[1]]
                 time_trace = np.round(np.trapz(feature_int))
-                data[i][j] = time_trace
+                data[i][j] = time_trace/tic[j]
                 i += 1
             bar()
     trc = np.ndarray.tolist(data)
@@ -244,15 +246,12 @@ def construct_xic(path):
     
     # Write the XICs to a .csv file
     # Use list comprehension for column titles
-    mzs = [f'pos{round(np.median(peak.mz), 4)}' for peak in peaks] if 'pos' in path.split('/')[-1].replace('.mzml', '') else [f'neg{round(np.median(peak.mz), 4)}' for peak in peaks]
-    print(path.split('/')[-1].replace('.mzml', ''))
-    print(mzs)
+    mzs = [f'pos{round(np.round(mz_axis[peak.index], 4), 4)}' for peak in peaks] if 'pos' in path.split('/')[-1].replace('.mzml', '') else [f'neg{np.round(mz_axis[peak.index], 4)}' for peak in peaks]
+
     columns = ['MS1 scan ID', 'TIC (a.u.)', 'Scan time (min)']
     columns.extend(mzs)
-    print(columns)
-    trc = pd.DataFrame(trc).T
 
-    print(trc)
+    trc = pd.DataFrame(trc).T
     trc.to_csv(path.replace('.mzml', '_XIC.csv'), header=columns, index=False)
 
     return trc
@@ -303,16 +302,17 @@ def annotate_lc_data(path, compounds):
         for j, ion in enumerate(ions.keys()):
             # Look for the closest m/z value in the first row of data 
             closest = np.abs(data.iloc[0] - ion).idxmin()
-
+            #TODO: Check if the closest m/z is within 5 ppm of the targeted m/z
+            print(ion, closest)
             # Get the respective time value for the highest intensity of this m/z
-            scan_time = data['Scan time (min)'].iloc[data[closest].idxmax()]
+            scan_time = data['Scan time (min)'].iloc[data[closest][1:].idxmax()] # Skip the first two rows
 
             print(f"Highest intensity of m/z={ion} ({compound}) was at {round(scan_time, 2)} mins.")
             compounds[compound][ion] = scan_time
             # Plot every XIC as a separate graph
-            axes[i].plot(data['Scan time (min)'], data[closest])
-            axes[i].plot(scan_time, data[closest].iloc[data[closest].idxmax()], "o")
-            axes[i].text(x=scan_time, y=data[closest].iloc[data[closest].idxmax()], s=f"{compound}, {ion}")
+            axes[i].plot(data['Scan time (min)'][1:], data[closest][1:])
+            axes[i].plot(scan_time, data[closest][1:].idxmax(), "o")
+            axes[i].text(x=scan_time, y=data[closest][1:].idxmax(), s=f"{compound}, {closest}")
             axes[i].set_xlabel('Scan time (min)')
             axes[i].set_ylabel('intensity / a.u.')
 
@@ -320,59 +320,29 @@ def annotate_lc_data(path, compounds):
     plt.savefig(os.path.join(plot_path, path.split('/')[-1].replace('.mzml', '_XICs.png')), dpi=300)
     plt.close()
 
-    # Save compounds to a .txt file
-    compounds = pd.DataFrame.from_dict(compounds)
+    # Take only the first ion in each compound and save to a .csv file
+
     print(compounds)
 
-    compounds.to_csv(os.path.join(path, path.split('/')[-1].replace('.mzml', '_compounds.csv')))
+    # compounds.to_csv(os.path.join(path, path.split('/')[-1].replace('.mzml', '_compounds.csv')))
 
     return compounds
 
-            
-
-
-
-# XXX: currently not used - delete? 
-def plot_mass_spectra(path, data, compounds):
-    '''
-    Helper function for plotting the averaged mass spectra for debugging purposes. 
-    '''
-    print(data)
-    spectra_dir = Path(path).parent.parent / 'plots' / 'ms_spectra'
-    os.makedirs(spectra_dir, exist_ok=True)
-
-    # Plotting for debugging purposes
-    plt.figure(figsize=(15, 10))
-    # Plot the found peaks on the data 
-    plt.plot(data['m/z'], data['intensity / a.u.'])
-    # From the ions list, find the closest m/z value in data['m/z] 
-    # to each ion, and plot it on top of the data
-    for compound, ions in compounds.items():
-        for ion in ions:
-            closest = data['m/z'].iloc[(np.abs(data['m/z'] - ion)).argmin()]
-            label = f"{compound}, {ion}"
-            plt.plot(closest, data['intensity / a.u.'].iloc[(np.abs(data['m/z'] - ion)).argmin()], "o")
-            plt.text(x=closest, y=data['intensity / a.u.'].iloc[(np.abs(data['m/z'] - ion)).argmin()], s=label)
-    plt.title(f'{os.path.basename(path)} average mass spectrum')
-    plt.xlabel('m/z (Da)')
-    plt.ylabel('intensity / a.u.')
-    plt.savefig(os.path.join(spectra_dir, f'{os.path.basename(path)}_spectrum.png'), dpi=300)
-    plt.close()
 
 
 # TODO: Add all the ions and the possible neutral losses 
 compounds = {
-    'Asp': dict.fromkeys([304.1028, 258.0611]),
-    'Glu': dict.fromkeys([318.1185, 282.0768]), 
-    'IntStd': dict.fromkeys([332.1344, 296.0927]),
-    'Asn': dict.fromkeys([303.1188, 257.0771]),
-    'Ser': dict.fromkeys([276.1080, 230.0663]),
-    'Gln': dict.fromkeys([317.1346, 281.0928])
+    'Asp': dict.fromkeys([304.1024, 258.0606]),
+    'Glu': dict.fromkeys([318.1180, 272.0763]), 
+    'IntStd': dict.fromkeys([332.1337, 286.0919]),
+    'Asn': dict.fromkeys([303.1183, 257.0766]),
+    'Ser': dict.fromkeys([276.1075, 230.0658]),
+    'Gln': dict.fromkeys([317.1340, 271.0923])
 }
 
 path = '/Users/mateuszfido/Library/CloudStorage/OneDrive-ETHZurich/Mice/UPLC code/hplc/data/ms/STMIX5mM-pos.mzml'
 # data, mz_axis, filename = load_ms1_data(path + 'STMIX5mM-pos.mzml')
-#average_intensity(path)
+# average_intensity(path)
 # construct_xic(path)
 #plot_mass_spectra(averaged, compounds, path)
 #quantify_targeted(averaged, compounds, path)
