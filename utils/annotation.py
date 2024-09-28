@@ -10,8 +10,11 @@ from alive_progress import alive_bar
 from scipy.signal import find_peaks, peak_widths
 from pathlib import Path
 from scipy.stats import mode
+import json
+from load_data import load_absorbance_data
 
 def load_ms1_data(path: str) -> tuple[list, np.ndarray, str]:
+    #FIXME: Unused
     """
     Using the pyteomics library, load the data from the .mzML file into a pandas DataFrame.
     
@@ -94,6 +97,10 @@ def average_intensity(path: str) -> pd.DataFrame:
         A DataFrame containing the m/z and intensity values.
     """
     
+    # Prepare the plotting folder
+    os.makedirs(Path(path).parent.parent / 'plots' / 'ms_spectra', exist_ok=True)
+    plot_path = Path(path).parent.parent / 'plots' / 'ms_spectra'
+
     # Load the data
     data = mzml.MzML(path)
     
@@ -125,10 +132,15 @@ def average_intensity(path: str) -> pd.DataFrame:
     
     # Store the averaged intensity values in a DataFrame
     data_matrix = pd.DataFrame({'m/z': np.round(mz_axis, 4), 'intensity / a.u.': avg_int }, dtype=np.float64)
+    
+    plt.plot(data_matrix['m/z'], data_matrix['intensity / a.u.'])
+    plt.xlabel('m/z')
+    plt.ylabel('average intensity / a.u.')
+    plt.savefig(os.path.join(plot_path, path.split('/')[-1].replace('.mzml', '.png')), dpi=300)
 
     # Save to a separate .csv file
     data_matrix.to_csv(path.replace('.mzml', '.csv'), index=False)
-    
+   
     return data_matrix
 
 class Peak():
@@ -172,7 +184,7 @@ def pick_peaks(path, mz_axis):
     peaklist = []
 
     # Find peaks
-    peaks = find_peaks(data['intensity / a.u.'], prominence=50)
+    peaks = find_peaks(data['intensity / a.u.'], distance=50, height=1000)
 
     # Calculate peak widths at 0.9 of peak amplitude
     widths, width_heights, left, right = peak_widths(data['intensity / a.u.'], peaks[0], rel_height=0.9)
@@ -185,9 +197,17 @@ def pick_peaks(path, mz_axis):
         counter += 1
         max_int_index = data['intensity / a.u.'].iloc[width[0]:width[1]].idxmax()
         max_int = data['intensity / a.u.'].iloc[max_int_index]
-        
         peak = Peak(max_int_index, mz, width) # create the Peak object
         peaklist.append(peak)    
+
+    '''
+    # For debugging purposes, plot the picked peaks
+    plt.plot(data['m/z'], data['intensity / a.u.'])
+    plt.plot(data['m/z'][peaks[0]], data['intensity / a.u.'][peaks[0]], "x")
+    plt.xlabel('m/z')
+    plt.ylabel('intensity / a.u.')
+    plt.show()
+    '''
 
     return peaklist
 
@@ -236,17 +256,20 @@ def construct_xic(path):
                     data[i][0] = np.round(mz_axis[peak.index], 4)
                 feature_int = int_interp[peak.width[0]:peak.width[1]]
                 time_trace = np.round(np.trapz(feature_int))
-                data[i][j] = time_trace/tic[j]
+                data[i][j] = time_trace
                 i += 1
             bar()
+
+    # Add the TIC, scan times, and XICs to the data matrix
     trc = np.ndarray.tolist(data)
-    
     trc.insert(1, scan_times)
     trc.insert(1, tic)
-    
-    # Write the XICs to a .csv file
+        # Write the XICs to a .csv file
     # Use list comprehension for column titles
-    mzs = [f'pos{round(np.round(mz_axis[peak.index], 4), 4)}' for peak in peaks] if 'pos' in path.split('/')[-1].replace('.mzml', '') else [f'neg{np.round(mz_axis[peak.index], 4)}' for peak in peaks]
+    if 'positive' in auxiliary.cvquery(scans[0], 'MS:1000130'):
+        mzs = [f'pos{np.round(mz_axis[peak.index], 4)}' for peak in peaks]  
+    else: 
+        mzs = [f'neg{np.round(mz_axis[peak.index], 4)}' for peak in peaks]
 
     columns = ['MS1 scan ID', 'TIC (a.u.)', 'Scan time (min)']
     columns.extend(mzs)
@@ -271,7 +294,7 @@ def quantify_targeted(data, compounds, path):
     return 
 
 
-def annotate_lc_data(path, compounds):
+def annotate_XICs(path, compounds):
     
     # Load the XIC data, skip MS1 scan index and TIC rows
     """
@@ -302,17 +325,24 @@ def annotate_lc_data(path, compounds):
         for j, ion in enumerate(ions.keys()):
             # Look for the closest m/z value in the first row of data 
             closest = np.abs(data.iloc[0] - ion).idxmin()
-            #TODO: Check if the closest m/z is within 5 ppm of the targeted m/z
-            print(ion, closest)
+
+            # Calculate ppm error
+            ppm_difference = np.abs((data[closest][0] - ion) / ion) * 1e6
+            if ppm_difference > 5:
+                print(f"Skipping {ion} for {compound}, as m/z difference is {closest} - {ion} = {round(ppm_difference, 2)} ppm.")
+                continue
+
             # Get the respective time value for the highest intensity of this m/z
             scan_time = data['Scan time (min)'].iloc[data[closest][1:].idxmax()] # Skip the first two rows
 
             print(f"Highest intensity of m/z={ion} ({compound}) was at {round(scan_time, 2)} mins.")
+
             compounds[compound][ion] = scan_time
+
             # Plot every XIC as a separate graph
             axes[i].plot(data['Scan time (min)'][1:], data[closest][1:])
-            axes[i].plot(scan_time, data[closest][1:].idxmax(), "o")
-            axes[i].text(x=scan_time, y=data[closest][1:].idxmax(), s=f"{compound}, {closest}")
+            axes[i].plot(scan_time, data[closest].iloc[data[closest][1:].idxmax()], "o")
+            axes[i].text(x=scan_time, y=data[closest].iloc[data[closest][1:].idxmax()], s=f"{compound}, {closest}")
             axes[i].set_xlabel('Scan time (min)')
             axes[i].set_ylabel('intensity / a.u.')
 
@@ -320,14 +350,46 @@ def annotate_lc_data(path, compounds):
     plt.savefig(os.path.join(plot_path, path.split('/')[-1].replace('.mzml', '_XICs.png')), dpi=300)
     plt.close()
 
-    # Take only the first ion in each compound and save to a .csv file
-
     print(compounds)
 
-    # compounds.to_csv(os.path.join(path, path.split('/')[-1].replace('.mzml', '_compounds.csv')))
+    # Dump the compounds dict into a .json file
+    with open(os.path.join(Path(path).parent, path.split('/')[-1].replace('.mzml', '_compounds.json')), 'w') as f:
+        json.dump(compounds, f)
 
     return compounds
 
+
+def annotate_lc_chromatograms(path, chromatogram):
+    compounds = json.load(open(os.path.join(Path(path).parent, path.split('/')[-1].replace('.mzml', '_compounds.json')), 'r'))
+    
+    lc_peaks = find_peaks(chromatogram['Value (mAU)'], distance=10, height=100)        
+    widths, width_heights, left, right = peak_widths(chromatogram['Value (mAU)'], lc_peaks[0], rel_height=0.9)
+
+    lc_peaks_RTs = chromatogram['Time (min)'][lc_peaks[0]]
+
+    plt.plot(chromatogram['Time (min)'], chromatogram['Value (mAU)'])
+    plt.plot(chromatogram['Time (min)'][lc_peaks[0]], chromatogram['Value (mAU)'][lc_peaks[0]], 'o')
+    
+    for compound, ions in compounds.items():
+        # Find the peak with the closest retention time to the value of the first ion in the list of ions
+        closest = np.abs(lc_peaks_RTs - ions[list(ions.keys())[0]]).idxmin()
+        print(closest)
+        plt.text(x=chromatogram['Time (min)'][closest], y=chromatogram['Value (mAU)'][closest], s=compound, fontsize=10, rotation=90)
+
+
+
+
+
+
+    # FIXME: unfinished
+    # Integrate every peak's area
+    for i, peak_idx in enumerate(lc_peaks[0]):
+        peak_area = np.trapz(chromatogram['Value (mAU)'][int(np.floor(left[i])):int(np.ceil(right[i]))],
+         x=chromatogram['Time (min)'][int(np.floor(left[i])):int(np.ceil(right[i]))])
+        # compounds['LC'][chromatogram['Name'][peak_idx]] = peak_area
+
+
+    plt.show()
 
 
 # TODO: Add all the ions and the possible neutral losses 
@@ -340,10 +402,13 @@ compounds = {
     'Gln': dict.fromkeys([317.1340, 271.0923])
 }
 
-path = '/Users/mateuszfido/Library/CloudStorage/OneDrive-ETHZurich/Mice/UPLC code/hplc/data/ms/STMIX5mM-pos.mzml'
-# data, mz_axis, filename = load_ms1_data(path + 'STMIX5mM-pos.mzml')
+path = '/Users/mateuszfido/Library/CloudStorage/OneDrive-ETHZurich/Mice/UPLC code/hplc/data/ms/STMIX5_02.mzml'
+chromatogram = load_absorbance_data('/Users/mateuszfido/Library/CloudStorage/OneDrive-ETHZurich/Mice/UPLC code/hplc/data/lc/STMIX5_02_UV_VIS_1.txt')
+
+
 # average_intensity(path)
 # construct_xic(path)
-#plot_mass_spectra(averaged, compounds, path)
-#quantify_targeted(averaged, compounds, path)
-annotate_lc_data(path, compounds)
+# plot_mass_spectra(averaged, compounds, path)
+# quantify_targeted(averaged, compounds, path)
+# annotate_XICs(path, compounds)
+annotate_lc_chromatograms(path, chromatogram)
