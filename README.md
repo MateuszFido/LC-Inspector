@@ -1,4 +1,4 @@
-### LCMSpector now has a commercial release, too! Check out the new & upgraded version here at https://app.proxiomics.com.
+### LCMSpector now has a commercial release, too! Check out the new & upgraded version at https://app.proxiomics.com.
 
 ---
 
