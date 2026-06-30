@@ -1,3 +1,7 @@
+### LCMSpector now has a commercial release, too! Check out the new & upgraded version here at https://app.proxiomics.com.
+
+---
+
 [![License: MIT](https://img.shields.io/badge/License-MIT_License-green)](https://mit-license.org/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.13990448.svg)](https://doi.org/10.5281/zenodo.13990448)
 [![Tests](https://github.com/MateuszFido/LC-Inspector/actions/workflows/ci.yml/badge.svg)](https://github.com/MateuszFido/LC-Inspector/actions/workflows/ci-nodata.yml)
